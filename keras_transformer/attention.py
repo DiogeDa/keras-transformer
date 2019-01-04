@@ -146,7 +146,7 @@ class _BaseMultiHeadAttention(Layer):
                     # new shape
                     K.concatenate([
                         K.shape(item)[:2],
-                        [-1, d_model // self.num_heads]]))
+                        [K.int_shape(item)[2] // self.compression_window_size, d_model // self.num_heads]]))
                 for item, kernel, bias in (
                     (k, self.k_conv_kernel, self.k_conv_bias),
                     (v, self.v_conv_kernel, self.v_conv_bias))]
