@@ -6,7 +6,7 @@ Contains implementation of the Transformer model described in papers
 import math
 from typing import Union, Callable, Optional
 
-from keras.layers import Layer, Add, activations, Dropout
+from keras.layers import Layer, Add, activations, Dropout, Conv1D
 from keras import initializers
 # noinspection PyPep8Naming
 from keras import backend as K
@@ -31,6 +31,7 @@ class LayerNormalization(Layer):
     "Unlike batch normalization, layer normalization performs exactly
     the same computation at training and test times."
     """
+
     def __init__(self, axis=-1, **kwargs):
         self.axis = axis
         super().__init__(**kwargs)
@@ -73,6 +74,7 @@ class TransformerTransition(Layer):
     """
 
     def __init__(self, activation: Union[str, Callable],
+                 kernel_size: int = 1,
                  size_multiplier: int = 4, **kwargs):
         """
         :param activation: activation function. Must be a string or a callable.
@@ -83,6 +85,7 @@ class TransformerTransition(Layer):
         """
         self.activation = activations.get(activation)
         self.size_multiplier = size_multiplier
+        self.kernel_size = kernel_size
         super().__init__(**kwargs)
 
     def get_config(self):
@@ -94,43 +97,12 @@ class TransformerTransition(Layer):
     # noinspection PyAttributeOutsideInit
     def build(self, input_shape):
         d_model = input_shape[-1]
-        self.weights1 = self.add_weight(
-            name='weights1',
-            shape=(d_model, self.size_multiplier * d_model),
-            initializer='glorot_uniform',
-            trainable=True)
-        self.biases1 = self.add_weight(
-            name='biases1',
-            shape=(self.size_multiplier * d_model,),
-            initializer='zeros',
-            trainable=True)
-        self.weights2 = self.add_weight(
-            name='weights2',
-            shape=(self.size_multiplier * d_model, d_model),
-            initializer='glorot_uniform',
-            trainable=True)
-        self.biases2 = self.add_weight(
-            name='biases2',
-            shape=(d_model,),
-            initializer='zeros',
-            trainable=True)
+        self.w1 = Conv1D(self.size_multiplier * d_model, self.kernel_size, activation=self.activation, padding="same")
+        self.w2 = Conv1D(d_model, self.kernel_size, activation=self.activation, padding="same")
         return super().build(input_shape)
 
     def call(self, inputs, **kwargs):
-        input_shape = K.int_shape(inputs)
-        d_model = input_shape[-1]
-        step1 = self.activation(
-            K.bias_add(
-                K.dot(K.reshape(inputs, (-1, d_model)),
-                      self.weights1),
-                self.biases1,
-                data_format='channels_last'))
-        step2 = K.bias_add(
-            K.dot(step1, self.weights2),
-            self.biases2,
-            data_format='channels_last')
-        result = K.reshape(step2, (-1,) + input_shape[-2:])
-        return result
+        return self.w2(self.w1(inputs))
 
 
 class TransformerBlock:
@@ -166,10 +138,12 @@ class TransformerBlock:
     more reasonable. You can use classical Transformer's (2017) way of
     connecting the pieces by passing vanilla_wiring=True to the constructor.
     """
+
     def __init__(self, name: str, num_heads: int,
                  residual_dropout: float = 0, attention_dropout: float = 0,
                  activation: Optional[Union[str, Callable]] = 'gelu',
                  compression_window_size: int = None,
+                 kernel_size: int = 1,
                  use_masking: bool = True,
                  vanilla_wiring=False):
         self.attention_layer = MultiHeadSelfAttention(
@@ -183,7 +157,7 @@ class TransformerBlock:
             else lambda x: x)
         self.norm2_layer = LayerNormalization(name=f'{name}_normalization2')
         self.transition_layer = TransformerTransition(
-            name=f'{name}_transition', activation=activation)
+            name=f'{name}_transition', activation=activation, kernel_size=kernel_size)
         self.addition_layer = Add(name=f'{name}_add')
         self.vanilla_wiring = vanilla_wiring
 
@@ -222,6 +196,7 @@ class TransformerACT(Layer):
         result = act_weighted_output
 
     """
+
     def __init__(self, halt_epsilon=0.01, time_penalty=0.01, **kwargs):
         """
         :param halt_epsilon: a small constant that allows computation to halt
@@ -318,7 +293,7 @@ class TransformerACT(Layer):
         # We don't know which step is the last, so we keep updating
         # expression for the loss with each call of the layer
         self.ponder_cost = (
-            self.time_penalty_t * K.mean(self.remainder + self.active_steps))
+                self.time_penalty_t * K.mean(self.remainder + self.active_steps))
         # Updating "the remaining probability" and the halt budget
         self.remainder = K.switch(
             no_further_steps,
