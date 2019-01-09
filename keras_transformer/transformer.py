@@ -98,7 +98,7 @@ class TransformerTransition(Layer):
     def build(self, input_shape):
         d_model = input_shape[-1]
         self.w1 = Conv1D(self.size_multiplier * d_model, self.kernel_size, activation=self.activation, padding="same")
-        self.w2 = Conv1D(d_model, self.kernel_size, activation=self.activation, padding="same")
+        self.w2 = Conv1D(d_model, self.kernel_size, activation="linear", padding="same")
         return super().build(input_shape)
 
     def call(self, inputs, **kwargs):
