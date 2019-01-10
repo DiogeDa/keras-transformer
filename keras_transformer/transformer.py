@@ -74,7 +74,6 @@ class TransformerTransition(Layer):
     """
 
     def __init__(self, activation: Union[str, Callable],
-                 kernel_size: int = 1,
                  size_multiplier: int = 4, **kwargs):
         """
         :param activation: activation function. Must be a string or a callable.
@@ -85,7 +84,6 @@ class TransformerTransition(Layer):
         """
         self.activation = activations.get(activation)
         self.size_multiplier = size_multiplier
-        self.kernel_size = kernel_size
         super().__init__(**kwargs)
 
     def get_config(self):
@@ -174,7 +172,6 @@ class TransformerBlock:
                  residual_dropout: float = 0, attention_dropout: float = 0,
                  activation: Optional[Union[str, Callable]] = 'gelu',
                  compression_window_size: int = None,
-                 kernel_size: int = 1,
                  use_masking: bool = True,
                  vanilla_wiring=False):
         self.attention_layer = MultiHeadSelfAttention(
@@ -188,7 +185,7 @@ class TransformerBlock:
             else lambda x: x)
         self.norm2_layer = LayerNormalization(name=f'{name}_normalization2')
         self.transition_layer = TransformerTransition(
-            name=f'{name}_transition', activation=activation, kernel_size=kernel_size)
+            name=f'{name}_transition', activation=activation)
         self.addition_layer = Add(name=f'{name}_add')
         self.vanilla_wiring = vanilla_wiring
 
