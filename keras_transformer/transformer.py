@@ -97,12 +97,43 @@ class TransformerTransition(Layer):
     # noinspection PyAttributeOutsideInit
     def build(self, input_shape):
         d_model = input_shape[-1]
-        self.w1 = Conv1D(self.size_multiplier * d_model, self.kernel_size, activation=self.activation, padding="same")
-        self.w2 = Conv1D(d_model, self.kernel_size, activation="linear", padding="same")
+        self.weights1 = self.add_weight(
+            name='weights1',
+            shape=(d_model, self.size_multiplier * d_model),
+            initializer='glorot_uniform',
+            trainable=True)
+        self.biases1 = self.add_weight(
+            name='biases1',
+            shape=(self.size_multiplier * d_model,),
+            initializer='zeros',
+            trainable=True)
+        self.weights2 = self.add_weight(
+            name='weights2',
+            shape=(self.size_multiplier * d_model, d_model),
+            initializer='glorot_uniform',
+            trainable=True)
+        self.biases2 = self.add_weight(
+            name='biases2',
+            shape=(d_model,),
+            initializer='zeros',
+            trainable=True)
         return super().build(input_shape)
 
     def call(self, inputs, **kwargs):
-        return self.w2(self.w1(inputs))
+        input_shape = K.int_shape(inputs)
+        d_model = input_shape[-1]
+        step1 = self.activation(
+            K.bias_add(
+                K.dot(K.reshape(inputs, (-1, d_model)),
+                      self.weights1),
+                self.biases1,
+                data_format='channels_last'))
+        step2 = K.bias_add(
+            K.dot(step1, self.weights2),
+            self.biases2,
+            data_format='channels_last')
+        result = K.reshape(step2, (-1,) + input_shape[-2:])
+        return result
 
 
 class TransformerBlock:
