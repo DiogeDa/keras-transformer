@@ -11,6 +11,7 @@ class _BaseMultiHeadAttention(Layer):
     Self-attention and its more general form used in decoders (the one which
     takes values and keys from the encoder).
     """
+
     def __init__(self, num_heads: int, use_masking: bool,
                  dropout: float = 0.0,
                  compression_window_size: int = None,
@@ -50,6 +51,7 @@ class _BaseMultiHeadAttention(Layer):
 
     # noinspection PyAttributeOutsideInit
     def build_output_params(self, d_model):
+        self.d_model = d_model
         self.output_weights = self.add_weight(
             name='output_weights',
             shape=(d_model, d_model),
@@ -89,7 +91,7 @@ class _BaseMultiHeadAttention(Layer):
                 f'of the attention heads {self.num_heads}')
 
     def attention(self, pre_q, pre_v, pre_k, out_seq_len: int, d_model: int,
-                  training=None):
+                  training=None, padding_mask=None):
         """
         Calculates the output of the attention once the affine transformations
         of the inputs are done. Here's the shapes of the arguments:
@@ -170,7 +172,7 @@ class _BaseMultiHeadAttention(Layer):
                                 K.reshape(q, (-1,) + q_shape[-2:]),
                                 K.reshape(k_transposed,
                                           (-1,) + k_t_shape[-2:]))
-                            / sqrt_d)),
+                            / sqrt_d, padding_mask)),
                     training=training),
                 K.reshape(v, (-1,) + v_shape[-2:])),
             (-1, self.num_heads, q_shape[-2], v_shape[-1]))
@@ -191,7 +193,7 @@ class _BaseMultiHeadAttention(Layer):
                                     training=training)
         return attention_softmax
 
-    def mask_attention_if_needed(self, dot_product):
+    def mask_attention_if_needed(self, dot_product, padding_mask):
         """
         Makes sure that (when enabled) each position
         (of a decoder's self-attention) cannot attend to subsequent positions.
@@ -204,17 +206,41 @@ class _BaseMultiHeadAttention(Layer):
         to 3D tensors (batch * num_heads, rows, cols)
         """
         if not self.use_masking:
-            return dot_product
-        last_dims = K.int_shape(dot_product)[-2:]
-        low_triangle_ones = (
-            np.tril(np.ones(last_dims))
-            # to ensure proper broadcasting
-            .reshape((1,) + last_dims))
-        inverse_low_triangle = 1 - low_triangle_ones
+            if padding_mask is None:
+                return dot_product
+            final_mask = padding_mask
+            if self.compression_window_size is not None:
+                # Just do adjust for cols
+                final_mask = K.expand_dims(final_mask, axis=-1)
+                final_mask = K.conv2d(final_mask, K.constant(np.ones(shape=(1,
+                                                                            self.compression_window_size,
+                                                                            1,
+                                                                            1
+                                                                            ))),
+                                      strides=(1, self.compression_window_size),
+                                      padding='valid', data_format='channels_last')
+                final_mask = K.squeeze(final_mask, axis=-1)
+
+            final_mask = K.repeat_elements(final_mask, self.num_heads, axis=0)
+        else:
+            last_dims = K.int_shape(dot_product)[-2:]
+            low_triangle_ones = (
+                np.tril(np.ones(last_dims))
+                    # to ensure proper broadcasting
+                    .reshape((1,) + last_dims))
+
+            low_triangle_ones = K.constant(low_triangle_ones, dtype=K.floatx())
+
+            if padding_mask is not None:
+                final_mask = K.min(low_triangle_ones, padding_mask)
+            else:
+                final_mask = low_triangle_ones
+
+        inverse_mask = 1 - final_mask
         close_to_negative_inf = -1e9
         result = (
-            K.constant(low_triangle_ones, dtype=K.floatx()) * dot_product +
-            K.constant(close_to_negative_inf * inverse_low_triangle))
+                final_mask * dot_product +
+                close_to_negative_inf * inverse_mask)
         return result
 
 
@@ -253,7 +279,7 @@ class MultiHeadAttention(_BaseMultiHeadAttention):
         self.build_output_params(d_model)
         return super().build(input_shape)
 
-    def call(self, inputs, **kwargs):
+    def call(self, inputs, padding_mask=None, **kwargs):
         if not (isinstance(inputs, list) and len(inputs) == 2):
             raise ValueError(
                 'You can call this layer only with a list of two tensors '
@@ -277,6 +303,7 @@ class MultiHeadAttention(_BaseMultiHeadAttention):
             K.dot(K.reshape(query_input, [-1, d_model]), self.q_weights),
             (-1, query_seq_len, self.num_heads, d_model // self.num_heads))
         return self.attention(pre_q, pre_v, pre_k, query_seq_len, d_model,
+                              padding_mask=padding_mask,
                               training=kwargs.get('training'))
 
 
@@ -306,7 +333,7 @@ class MultiHeadSelfAttention(_BaseMultiHeadAttention):
         self.build_output_params(d_model)
         return super().build(input_shape)
 
-    def call(self, inputs, **kwargs):
+    def call(self, inputs, padding_mask=None, **kwargs):
         if not K.is_tensor(inputs):
             raise ValueError(
                 'The layer can be called only with one tensor as an argument')
@@ -323,6 +350,7 @@ class MultiHeadSelfAttention(_BaseMultiHeadAttention):
                 (-1, seq_len, self.num_heads, d_model // self.num_heads))
             for i in range(3)]
         attention_out = self.attention(pre_q, pre_v, pre_k, seq_len, d_model,
+                                       padding_mask=padding_mask,
                                        training=kwargs.get('training'))
         return attention_out
 
