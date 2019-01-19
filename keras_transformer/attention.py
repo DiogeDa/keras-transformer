@@ -83,6 +83,10 @@ class _BaseMultiHeadAttention(Layer):
                 initializer='zeros',
                 trainable=True)
 
+            mask_conv_kernel = np.ones(shape=(1, self.compression_window_size, 1, 1))
+            mask_conv_kernel[:, 0, :, :] = 1
+            self.mask_conv_kernel = K.constant(mask_conv_kernel)
+
     def validate_model_dimensionality(self, d_model: int):
         if d_model % self.num_heads != 0:
             raise ValueError(
@@ -210,13 +214,9 @@ class _BaseMultiHeadAttention(Layer):
                 return dot_product
             final_mask = padding_mask
             if self.compression_window_size is not None:
-                # Just do adjust for cols
+                # Adjust only columns
                 final_mask = K.expand_dims(final_mask, axis=-1)
-                final_mask = K.conv2d(final_mask, K.constant(np.ones(shape=(1,
-                                                                            self.compression_window_size,
-                                                                            1,
-                                                                            1
-                                                                            ))),
+                final_mask = K.conv2d(final_mask, self.mask_conv_kernel,
                                       strides=(1, self.compression_window_size),
                                       padding='valid', data_format='channels_last')
                 final_mask = K.squeeze(final_mask, axis=-1)
