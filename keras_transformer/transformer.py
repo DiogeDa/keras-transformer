@@ -6,10 +6,10 @@ Contains implementation of the Transformer model described in papers
 import math
 from typing import Union, Callable, Optional
 
-from keras.layers import Layer, Add, activations, Dropout, Conv1D
-from keras import initializers
 # noinspection PyPep8Naming
 from keras import backend as K
+from keras import initializers
+from keras.layers import Layer, Add, activations, Dropout
 from keras.utils import get_custom_objects
 
 from keras_transformer.attention import MultiHeadSelfAttention
@@ -281,8 +281,8 @@ class TransformerACT(Layer):
             halting, name='zeros_like_halting')
         self.ones_like_halting = K.ones_like(
             halting, name='ones_like_halting')
-        self.remainder = self.ones_like_halting
-        self.active_steps = self.zeros_like_halting
+        self.remainder = K.ones_like(halting, name='remainder')
+        self.active_steps = K.zeros_like(halting, name='active_steps')
         self.halt_budget = self.ones_like_halting - self.halt_epsilon
 
     def call(self, inputs, **kwargs):
@@ -320,6 +320,8 @@ class TransformerACT(Layer):
             self.zeros_like_halting)
         # We don't know which step is the last, so we keep updating
         # expression for the loss with each call of the layer
+        # `remainder` will get smaller and smaller but `activate_steps` vice,
+        # so averaging them as cost.
         self.ponder_cost = (
                 self.time_penalty_t * K.mean(self.remainder + self.active_steps))
         # Updating "the remaining probability" and the halt budget
