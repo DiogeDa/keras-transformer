@@ -209,32 +209,15 @@ class _BaseMultiHeadAttention(Layer):
         :param dot_product: scaled dot-product of Q and K after reshaping them
         to 3D tensors (batch * num_heads, rows, cols)
         """
-        if not self.use_masking:
-            if padding_mask is None:
-                return dot_product
-            final_mask = padding_mask
-            if self.compression_window_size is not None:
-                # Adjust only columns
-                final_mask = K.expand_dims(final_mask, axis=-1)
-                final_mask = K.conv2d(final_mask, self.mask_conv_kernel,
-                                      strides=(1, self.compression_window_size),
-                                      padding='valid', data_format='channels_last')
-                final_mask = K.squeeze(final_mask, axis=-1)
 
-            final_mask = K.repeat_elements(final_mask, self.num_heads, axis=0)
+        if padding_mask is not None and self.use_masking:
+            final_mask = K.minimum(self.__padding_mask(padding_mask), self.__low_triangle_mask(dot_product))
+        elif padding_mask is not None:
+            final_mask = self.__padding_mask(padding_mask)
+        elif self.use_masking:
+            final_mask = self.__low_triangle_mask(dot_product)
         else:
-            last_dims = K.int_shape(dot_product)[-2:]
-            low_triangle_ones = (
-                np.tril(np.ones(last_dims))
-                    # to ensure proper broadcasting
-                    .reshape((1,) + last_dims))
-
-            low_triangle_ones = K.constant(low_triangle_ones, dtype=K.floatx())
-
-            if padding_mask is not None:
-                final_mask = K.min(low_triangle_ones, padding_mask)
-            else:
-                final_mask = low_triangle_ones
+            return dot_product
 
         inverse_mask = 1 - final_mask
         close_to_negative_inf = -1e9
@@ -242,6 +225,27 @@ class _BaseMultiHeadAttention(Layer):
                 final_mask * dot_product +
                 close_to_negative_inf * inverse_mask)
         return result
+
+    def __padding_mask(self, padding_mask):
+        if self.compression_window_size is not None:
+            # Adjust only columns
+            padding_mask = K.expand_dims(padding_mask, axis=-1)
+            padding_mask = K.conv2d(padding_mask, self.mask_conv_kernel,
+                                    strides=(1, self.compression_window_size),
+                                    padding='valid', data_format='channels_last')
+            padding_mask = K.squeeze(padding_mask, axis=-1)
+        padding_mask = K.repeat_elements(padding_mask, self.num_heads, axis=0)
+        return padding_mask
+
+    def __low_triangle_mask(self, dot_product):
+        last_dims = K.int_shape(dot_product)[-2:]
+        low_triangle_ones = (
+            np.tril(np.ones(last_dims))
+                # to ensure proper broadcasting
+                .reshape((1,) + last_dims))
+
+        low_triangle_ones = K.constant(low_triangle_ones, dtype=K.floatx())
+        return low_triangle_ones
 
 
 class MultiHeadAttention(_BaseMultiHeadAttention):
