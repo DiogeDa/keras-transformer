@@ -83,8 +83,12 @@ class _BaseMultiHeadAttention(Layer):
                 initializer='zeros',
                 trainable=True)
 
-            mask_conv_kernel = np.ones(shape=(1, self.compression_window_size, 1, 1))
-            mask_conv_kernel[:, 0, :, :] = 1
+            # (num_filters, channels, height, width)
+            mask_conv_kernel = np.zeros(shape=(1, 1, 1, self.compression_window_size))
+            mask_conv_kernel[..., 0] = 1
+
+            # (height, width, channels, num_filters)
+            mask_conv_kernel = np.transpose(mask_conv_kernel, axes=(2, 3, 1, 0))
             self.mask_conv_kernel = K.constant(mask_conv_kernel)
 
     def validate_model_dimensionality(self, d_model: int):
